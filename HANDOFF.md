@@ -149,3 +149,55 @@ Only after physical success should this be considered fixed.
 - do not merge to upstream/main automatically;
 - do not modify `Rzbck/ios-godot-lab` from this tooling fork without explicit scope change;
 - do not discard or overwrite local work with destructive Git commands.
+
+## Update - explicit Watch bundle signing
+
+Code commit:
+
+dd4109c6ead22823f956e3f0f20d480e4b9965df
+fix(watch): sign embedded watchOS app bundles
+
+Root cause addressed:
+
+- apple-codesign recursively discovers Frameworks/ and PlugIns/, but not Watch/.
+- isideload already had the Watch provisioning profile and Watch entitlements in its per-bundle maps.
+- the embedded Watch app therefore needed an explicit sign_bundle() pass before signing the iPhone root bundle.
+
+Implementation:
+
+for watch_app in app.bundle.watch_apps() {
+    sign_bundle(&watch_app.bundle_dir, &settings)?;
+}
+
+Expected effect:
+
+- embedded.mobileprovision inside the Watch app;
+- Watch-specific entitlements;
+- signed Watch executable;
+- _CodeSignature for the Watch bundle.
+
+CI validation:
+
+- run: 34385333279
+- exact code SHA: dd4109c6ead22823f956e3f0f20d480e4b9965df
+- Windows: tests PASS, build PASS, artifact upload PASS.
+- macOS: tests PASS, build PASS, artifact upload PASS.
+- Ubuntu: infrastructure failure before tests during apt-get update.
+- Ubuntu failure: Google Chrome apt repository Hash Sum mismatch.
+- rerun attempt 2 reproduced the same external apt failure.
+
+Windows isideload artifact:
+
+- name: minimal-windows.exe
+- artifact ID: 10117522030
+- digest: sha256:2609a0cd4d8aaafee3c77a3aa857b63188ddee7c0313d8a4b0c84c5bd1868401
+
+Physical Apple Watch validation of this signing fix has NOT been performed yet.
+
+Next exact step:
+
+1. Pin iLoader to dd4109c6ead22823f956e3f0f20d480e4b9965df.
+2. Build an exact-SHA Windows iLoader.
+3. Install that experimental iLoader.
+4. Reinstall the SAME Watch Sensor Lab IPA.
+5. Verify physical Watch installation and launch.
