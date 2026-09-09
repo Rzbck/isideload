@@ -46,7 +46,6 @@ impl Bundle {
             "Failed to parse Info.plist".to_string(),
         ))?;
 
-        // Load app extensions from PlugIns directory
         let plug_ins_dir = bundle_path.join("PlugIns");
         let app_extensions = if isideload_vfs::fs::metadata(&plug_ins_dir).is_ok() {
             isideload_vfs::fs::read_dir(&plug_ins_dir)
@@ -64,7 +63,6 @@ impl Bundle {
             Vec::new()
         };
 
-        // Load frameworks from Frameworks directory
         let frameworks_dir = bundle_path.join("Frameworks");
         let frameworks = if isideload_vfs::fs::metadata(&frameworks_dir).is_ok() {
             isideload_vfs::fs::read_dir(&frameworks_dir)
@@ -82,7 +80,6 @@ impl Bundle {
             Vec::new()
         };
 
-        // Load embedded watchOS companion apps from Watch directory.
         let watch_dir = bundle_path.join("Watch");
         let watch_apps = if isideload_vfs::fs::metadata(&watch_dir).is_ok() {
             isideload_vfs::fs::read_dir(&watch_dir)
@@ -101,7 +98,6 @@ impl Bundle {
             Vec::new()
         };
 
-        // Find all .dylib files in the bundle directory (recursive)
         let libraries = find_dylibs(&bundle_path, &bundle_path)?;
 
         Ok(Bundle {
@@ -193,12 +189,7 @@ impl Bundle {
         main_app_id_str: &str,
     ) -> Result<(), Report> {
         for ext in self.app_extensions.iter_mut() {
-            Self::rewrite_child_bundle_id(
-                ext,
-                main_app_bundle_id,
-                main_app_id_str,
-                "Extension",
-            )?;
+            Self::rewrite_child_bundle_id(ext, main_app_bundle_id, main_app_id_str, "Extension")?;
         }
 
         for watch_app in self.watch_apps.iter_mut() {
@@ -237,7 +228,6 @@ impl Bundle {
             bundles.push(bundle);
             bundle.collect_app_id_bundles_into(bundles);
         }
-
         for bundle in &self.watch_apps {
             bundles.push(bundle);
             bundle.collect_app_id_bundles_into(bundles);
@@ -267,7 +257,6 @@ impl Bundle {
 
     pub fn write_info_recursive(&self) -> Result<(), Report> {
         self.write_info()?;
-
         for bundle in &self.app_extensions {
             bundle.write_info_recursive()?;
         }
@@ -277,7 +266,6 @@ impl Bundle {
         for bundle in &self.watch_apps {
             bundle.write_info_recursive()?;
         }
-
         Ok(())
     }
 
@@ -304,12 +292,10 @@ impl Bundle {
             bundles.push(bundle.clone());
             bundle.collect_nested_bundles_into(bundles);
         }
-
         for bundle in &self.frameworks {
             bundles.push(bundle.clone());
             bundle.collect_nested_bundles_into(bundles);
         }
-
         for bundle in &self.watch_apps {
             bundles.push(bundle.clone());
             bundle.collect_nested_bundles_into(bundles);
