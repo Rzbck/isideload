@@ -196,18 +196,9 @@ impl Sideloader {
 
         info!("Acquired provisioning profile");
 
-        app.bundle.write_info()?;
-        for ext in app.bundle.app_extensions_mut() {
-            ext.write_info()?;
-        }
-        for ext in app.bundle.frameworks_mut() {
-            ext.write_info()?;
-        }
-
-        // isideload_vfs::fs::write(
-        //     app.bundle.bundle_dir.join("embedded.mobileprovision"),
-        //     provisioning_profile.encoded_profile.as_ref(),
-        // )?;
+        // Persist all rewritten Info.plists, including embedded watchOS apps and their extensions,
+        // before apple-codesign scans and signs the bundle tree.
+        app.bundle.write_info_recursive()?;
 
         if let Some(callback) = &progress_callback {
             callback(0.3).await;
@@ -277,7 +268,7 @@ impl Sideloader {
         Ok(special_app)
     }
 
-    /// Get the developer team according to the configured team selection behavior
+    /// Get the developer team according to the configured team selection behavior.
     pub async fn get_team(&mut self) -> Result<DeveloperTeam, Report> {
         if let Some(team) = &self.team {
             return Ok(team.clone());

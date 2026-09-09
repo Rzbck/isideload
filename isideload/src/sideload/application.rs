@@ -75,7 +75,6 @@ impl Application {
                     ));
                 }
             } else {
-                // gather the directory contents as a string for debugging
                 let mut contents = String::new();
                 if isideload_vfs::fs::metadata(&temp_path).is_ok() && temp_path.is_dir() {
                     let entries = isideload_vfs::fs::read_dir(&temp_path)
@@ -155,24 +154,8 @@ impl Application {
         main_app_bundle_id: &str,
         main_app_id_str: &str,
     ) -> Result<(), Report> {
-        let extensions = self.bundle.app_extensions_mut();
-        for ext in extensions.iter_mut() {
-            if let Some(id) = ext.bundle_identifier() {
-                if !(id.starts_with(main_app_bundle_id) && id.len() > main_app_bundle_id.len()) {
-                    bail!(SideloadError::InvalidBundle(format!(
-                        "Extension {} is not part of the main app bundle identifier: {}",
-                        ext.bundle_name().unwrap_or("Unknown"),
-                        id
-                    )));
-                } else {
-                    ext.set_bundle_identifier(&format!(
-                        "{}{}",
-                        main_app_id_str,
-                        &id[main_app_bundle_id.len()..]
-                    ));
-                }
-            }
-        }
+        self.bundle
+            .rewrite_embedded_bundle_ids(main_app_bundle_id, main_app_id_str)?;
         self.bundle.set_bundle_identifier(main_app_id_str);
 
         Ok(())
@@ -184,9 +167,7 @@ impl Application {
         dev_session: &mut DeveloperSession,
         team: &DeveloperTeam,
     ) -> Result<Vec<AppId>, Report> {
-        let extension_refs: Vec<_> = self.bundle.app_extensions().iter().collect();
-        let mut bundles_with_app_id = vec![&self.bundle];
-        bundles_with_app_id.extend(extension_refs);
+        let bundles_with_app_id = self.bundle.collect_app_id_bundles();
 
         let list_app_ids_response = dev_session
             .list_app_ids(team, None)
@@ -209,22 +190,18 @@ impl Application {
                     "Apple reports a negative number of available app IDs ({}), which shouldn't be possible.",
                     available
                 );
-                // Since the App IDs should never be negative in the first place, it might still be worth trying to register them anyways. Who knows.
-            } else {
-                // We only do the conversion if available is positive, else we get an integral conversion error
-                if app_ids_to_register.len() > available.try_into()? {
-                    bail!(
-                        "Not enough available app IDs. {} {} required, but only {} {} available.",
-                        app_ids_to_register.len(),
-                        if app_ids_to_register.len() == 1 {
-                            "is"
-                        } else {
-                            "are"
-                        },
-                        available,
-                        if available == 1 { "is" } else { "are" }
-                    );
-                }
+            } else if app_ids_to_register.len() > available.try_into()? {
+                bail!(
+                    "Not enough available app IDs. {} {} required, but only {} {} available.",
+                    app_ids_to_register.len(),
+                    if app_ids_to_register.len() == 1 {
+                        "is"
+                    } else {
+                        "are"
+                    },
+                    available,
+                    if available == 1 { "is" } else { "are" }
+                );
             }
         }
 
@@ -320,7 +297,6 @@ pub enum SpecialApp {
     StikStore,
 }
 
-// impl display
 impl std::fmt::Display for SpecialApp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
