@@ -201,3 +201,113 @@ Next exact step:
 3. Install that experimental iLoader.
 4. Reinstall the SAME Watch Sensor Lab IPA.
 5. Verify physical Watch installation and launch.
+
+## Update - physical result of explicit signing patch
+
+The explicit Watch `sign_bundle()` patch at code SHA `dd4109c6ead22823f956e3f0f20d480e4b9965df` was pinned into iLoader code SHA `045caa99d3122cd2bcba878588b1678a9cf5f6dc` and tested physically on the same real iPhone + Apple Watch.
+
+Result:
+
+- iPhone reinstall succeeds;
+- Watch delivery is attempted;
+- Watch installation DB updates/recreates the Watch bundle placeholder;
+- the Watch app still does **not** finalize;
+- `IsPlaceholder = True` remains.
+
+Observed Watch DB progression during fresh attempts:
+
+- previous `SequenceNumber = 1501`;
+- explicit-signing clean reinstall: `SequenceNumber = 1505`;
+- later fresh reinstall during diagnostics: `SequenceNumber = 1509`;
+- container UUID and bundle path changed between attempts.
+
+This proves the latest install attempts are reaching watchOS and refreshing the placeholder. The explicit signing patch is **necessary evidence-wise but not sufficient** to make the Watch app install.
+
+## Update - Watch syslog path is not yielding usable live logs
+
+Using `pymobiledevice3 11.12.0` against the paired Watch through CompanionProxy + forwarded Watch lockdown:
+
+- Watch connection works (`Watch7,14`, watchOS `26.6`);
+- `OsTraceService.get_pid_list()` succeeds and returned **358 processes**;
+- relevant processes include `amfid`, `appconduitd`, `appstored`, `installcoordinationd`, `installd`, `misagent`, `securityd`;
+- global `OsTraceService.syslog()` yielded no entries;
+- adding `PROMISCUOUS` still yielded no entries;
+- classic `SyslogService` yielded no useful lines;
+- per-PID targeted capture during a fresh reinstall also wrote **0 bytes**.
+
+Treat the live syslog route as non-productive for now. The zero-byte files contain no diagnostic evidence and should not be filtered further.
+
+## Update - exact post-signing bundle captured and inspected
+
+The exact signed app bundle produced by the physically tested iLoader path was captured from its temporary extraction directory before isideload cleanup removed it.
+
+Local capture:
+
+`E:\_Project\IOS APP\_Tools\pymobiledevice3-watch\signed-captures\WatchSensorLab-signed-20260909_205028.app`
+
+The embedded Watch bundle contains:
+
+- `Info.plist`;
+- `embedded.mobileprovision` (**12720 bytes**);
+- `_CodeSignature\CodeResources` (**2182 bytes**);
+- `WatchSensorLabWatch` executable (**371759 bytes**).
+
+Therefore the explicit Watch signing pass is definitely producing a Watch profile + bundle signature on disk. The remaining failure occurs despite those files being present.
+
+### Captured Watch Info.plist is coherent
+
+Observed from the exact signed bundle:
+
+- rewritten iPhone ID: `com.rzbck.watchsensorlab.59858TV9N2`;
+- rewritten Watch ID: `com.rzbck.watchsensorlab.59858TV9N2.watchkitapp`;
+- `WKCompanionAppBundleIdentifier` exactly matches the rewritten iPhone ID;
+- `WKApplication = true`;
+- `WKRunsIndependentlyOfCompanionApp = false`;
+- `CFBundleExecutable = WatchSensorLabWatch`;
+- `DTPlatformName = watchos`;
+- `MinimumOSVersion = 10.0`;
+- `UIDeviceFamily = [4]`.
+
+### Captured Watch provisioning profile — IMPORTANT NEW EVIDENCE
+
+The profile embedded in the exact signed Watch app reports:
+
+- name: `iOS Team Provisioning Profile: com.rzbck.watchsensorlab.59858TV9N2.watchkitapp`;
+- `Platform = ['iOS', 'xrOS', 'visionOS']`;
+- **no `watchOS` entry is present in `Platform`**;
+- expiration: `2026-09-16 18:50:59`;
+- `ProvisionedDevices` count: **2**;
+- the physical paired Watch UDID is present in `ProvisionedDevices`;
+- `application-identifier` matches the Watch bundle ID;
+- team identifier matches the profile team;
+- `get-task-allow = true`.
+
+This materially changes the diagnosis:
+
+- missing Watch registration is no longer the leading explanation because the physical Watch UDID is in the actual embedded profile;
+- companion ID rewrite is correct;
+- `WKApplication` is correct;
+- explicit Watch signing/profile embedding is occurring;
+- Developer Mode is enabled;
+- yet the embedded Watch profile is still named as an **iOS Team Provisioning Profile** and its `Platform` list lacks `watchOS`.
+
+## Current strongest root-cause candidate — NOT YET PROVEN
+
+The strongest current evidence points at the **Watch provisioning-profile acquisition path**, not at bundle discovery or missing signing files.
+
+Even though current isideload code routes Watch developer-service operations through the `ios/` QH65B2 service path and adds `DTDK_Platform = watchos`, the actual profile returned and embedded into the Watch bundle appears to be an iOS-family profile (`iOS/xrOS/visionOS`) rather than an explicitly watchOS profile.
+
+Do **not** claim final root cause yet. We still need to determine whether a valid modern watchOS development profile is expected to include `watchOS` in the `Platform` array and, if yes, which request parameter/action/profile type is currently wrong.
+
+## Next exact step after this documentation update
+
+Before modifying code again:
+
+1. inspect `download_team_provisioning_profile` and all Watch-specific profile creation/download calls in `isideload/src/dev/app_ids.rs` / related developer-service code;
+2. compare exact request payloads for iOS vs `DeveloperDeviceType::Watchos`;
+3. verify which profile type/action Apple expects for a watchOS application and whether `DTDK_Platform=watchos` alone is sufficient;
+4. determine why the real returned profile has `Platform = ['iOS', 'xrOS', 'visionOS']`;
+5. only then implement the smallest generic provisioning fix;
+6. run tests/CI, pin exact code SHA into iLoader, and physically retest.
+
+No new code patch has been made for this profile-platform finding yet.
