@@ -265,17 +265,17 @@ impl Sideloader {
         // Apple Watch companions are exposed by the iPhone's companion_proxy.
         // Register each paired Watch through Apple's watchOS developer endpoint
         // before requesting watchOS provisioning profiles.
-        let mut companion_proxy = CompanionProxy::connect(device_provider)
+        let mut provisioning_companion_proxy = CompanionProxy::connect(device_provider)
             .await
             .context("Failed to connect to Apple Watch companion proxy")?;
 
-        let paired_watches = companion_proxy
+        let paired_watches = provisioning_companion_proxy
             .get_device_registry()
             .await
             .context("Failed to list paired Apple Watch devices")?;
 
         for watch_udid in paired_watches {
-            let watch_name = companion_proxy
+            let watch_name = provisioning_companion_proxy
                 .get_value(&watch_udid, "DeviceName")
                 .await
                 .ok()
@@ -292,6 +292,10 @@ impl Sideloader {
                 .await
                 .context("Failed to register paired Apple Watch as a development device")?;
         }
+
+        // companion_proxy can be invalidated while the iPhone app is installed.
+        // Do not reuse this provisioning connection for the post-install Watch transfer.
+        drop(provisioning_companion_proxy);
 
         let (signed_app_path, special_app) = self
             .sign_app(
@@ -318,10 +322,15 @@ impl Sideloader {
         let watch_apps = signed_bundle.watch_apps().to_vec();
 
         if !watch_apps.is_empty() {
+            info!("Reconnecting to Apple Watch companion proxy after iPhone install...");
+            let mut install_companion_proxy = CompanionProxy::connect(device_provider)
+                .await
+                .context("Failed to reconnect to Apple Watch companion proxy after iPhone install")?;
+
             info!("Installing Apple Watch companion app directly...");
             crate::sideload::watch_install::install_watch_apps(
                 device_provider,
-                &mut companion_proxy,
+                &mut install_companion_proxy,
                 &watch_apps,
                 &self.machine_name,
                 |progress| {
