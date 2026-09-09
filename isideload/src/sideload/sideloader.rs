@@ -11,6 +11,7 @@ use crate::{
         TeamSelection,
         application::{Application, SpecialApp},
         builder::MaxCertsBehavior,
+        bundle::Bundle,
         cert_identity::CertificateIdentity,
         sign,
     },
@@ -308,6 +309,28 @@ impl Sideloader {
         })
         .await
         .context("Failed to install app on device")?;
+
+        // The iPhone install may leave the embedded Watch app as a process-scoped placeholder.
+        // Re-open the signed bundle before cleanup and install each Watch app directly through
+        // the paired Watch's streaming_zip_conduit service. This is the path physically validated
+        // on watchOS after the signed Watch bundle itself was proven valid.
+        let signed_bundle = Bundle::new(signed_app_path.clone())?;
+        let watch_apps = signed_bundle.watch_apps().to_vec();
+
+        if !watch_apps.is_empty() {
+            info!("Installing Apple Watch companion app directly...");
+            crate::sideload::watch_install::install_watch_apps(
+                device_provider,
+                &mut companion_proxy,
+                &watch_apps,
+                &self.machine_name,
+                |progress| {
+                    info!("Installing Apple Watch app: {}%", progress);
+                },
+            )
+            .await
+            .context("Failed to install Apple Watch companion app")?;
+        }
 
         if self.delete_app_after_install
             && let Err(e) = isideload_vfs::fs::remove_dir_all(signed_app_path)
