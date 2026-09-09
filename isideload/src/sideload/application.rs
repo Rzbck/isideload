@@ -4,12 +4,14 @@
 use crate::SideloadError;
 use crate::dev::app_ids::{AppId, AppIdsApi};
 use crate::dev::developer_session::DeveloperSession;
+use crate::dev::device_type::DeveloperDeviceType;
 use crate::dev::teams::DeveloperTeam;
 use crate::sideload::bundle::Bundle;
 use crate::sideload::cert_identity::CertificateIdentity;
 use isideload_vfs::fs::File;
 use rootcause::option_ext::OptionExt;
 use rootcause::prelude::*;
+use std::collections::HashSet;
 use std::io::Write;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -161,6 +163,15 @@ impl Application {
         Ok(())
     }
 
+    pub fn watch_bundle_ids(&self) -> HashSet<String> {
+        self.bundle
+            .watch_apps()
+            .iter()
+            .flat_map(|watch_app| watch_app.collect_app_id_bundles())
+            .filter_map(|bundle| bundle.bundle_identifier().map(str::to_string))
+            .collect()
+    }
+
     pub async fn register_app_ids(
         &self,
         //mode: &ExtensionsBehavior,
@@ -168,61 +179,91 @@ impl Application {
         team: &DeveloperTeam,
     ) -> Result<Vec<AppId>, Report> {
         let bundles_with_app_id = self.bundle.collect_app_id_bundles();
+        let watch_bundle_ids = self.watch_bundle_ids();
 
-        let list_app_ids_response = dev_session
-            .list_app_ids(team, None)
-            .await
-            .context("Failed to list app IDs for the developer team")?;
-        let app_ids_to_register = bundles_with_app_id
+        let ios_bundles: Vec<_> = bundles_with_app_id
             .iter()
+            .copied()
             .filter(|bundle| {
-                let bundle_id = bundle.bundle_identifier().unwrap_or("");
-                !list_app_ids_response
-                    .app_ids
-                    .iter()
-                    .any(|app_id| app_id.identifier == bundle_id)
-            })
-            .collect::<Vec<_>>();
-
-        if let Some(available) = list_app_ids_response.available_quantity {
-            if available < 0 {
-                warn!(
-                    "Apple reports a negative number of available app IDs ({}), which shouldn't be possible.",
-                    available
-                );
-            } else if app_ids_to_register.len() > available.try_into()? {
-                bail!(
-                    "Not enough available app IDs. {} {} required, but only {} {} available.",
-                    app_ids_to_register.len(),
-                    if app_ids_to_register.len() == 1 {
-                        "is"
-                    } else {
-                        "are"
-                    },
-                    available,
-                    if available == 1 { "is" } else { "are" }
-                );
-            }
-        }
-
-        for bundle in app_ids_to_register {
-            let id = bundle.bundle_identifier().unwrap_or("");
-            let name = bundle.bundle_name().unwrap_or("");
-            dev_session.add_app_id(team, name, id, None).await?;
-        }
-        let list_app_id_response = dev_session.list_app_ids(team, None).await?;
-        let app_ids: Vec<_> = list_app_id_response
-            .app_ids
-            .into_iter()
-            .filter(|app_id| {
-                bundles_with_app_id
-                    .iter()
-                    .any(|bundle| app_id.identifier == bundle.bundle_identifier().unwrap_or(""))
+                bundle
+                    .bundle_identifier()
+                    .is_some_and(|id| !watch_bundle_ids.contains(id))
             })
             .collect();
 
+        let watch_bundles: Vec<_> = bundles_with_app_id
+            .iter()
+            .copied()
+            .filter(|bundle| {
+                bundle
+                    .bundle_identifier()
+                    .is_some_and(|id| watch_bundle_ids.contains(id))
+            })
+            .collect();
+
+        let mut registered_app_ids = Vec::new();
+
+        for (device_type, bundles) in [
+            (DeveloperDeviceType::Ios, ios_bundles),
+            (DeveloperDeviceType::Watchos, watch_bundles),
+        ] {
+            if bundles.is_empty() {
+                continue;
+            }
+
+            let list_app_ids_response = dev_session
+                .list_app_ids(team, Some(device_type.clone()))
+                .await
+                .context("Failed to list app IDs for the developer team")?;
+
+            let app_ids_to_register = bundles
+                .iter()
+                .filter(|bundle| {
+                    let bundle_id = bundle.bundle_identifier().unwrap_or("");
+                    !list_app_ids_response
+                        .app_ids
+                        .iter()
+                        .any(|app_id| app_id.identifier == bundle_id)
+                })
+                .collect::<Vec<_>>();
+
+            if let Some(available) = list_app_ids_response.available_quantity {
+                if available < 0 {
+                    warn!(
+                        "Apple reports a negative number of available app IDs ({}), which shouldn't be possible.",
+                        available
+                    );
+                } else if app_ids_to_register.len() > available.try_into()? {
+                    bail!(
+                        "Not enough available app IDs. {} required, but only {} available.",
+                        app_ids_to_register.len(),
+                        available
+                    );
+                }
+            }
+
+            for bundle in app_ids_to_register {
+                let id = bundle.bundle_identifier().unwrap_or("");
+                let name = bundle.bundle_name().unwrap_or("");
+
+                dev_session
+                    .add_app_id(team, name, id, Some(device_type.clone()))
+                    .await?;
+            }
+
+            let response = dev_session
+                .list_app_ids(team, Some(device_type.clone()))
+                .await?;
+
+            registered_app_ids.extend(response.app_ids.into_iter().filter(|app_id| {
+                bundles.iter().any(|bundle| {
+                    app_id.identifier == bundle.bundle_identifier().unwrap_or("")
+                })
+            }));
+        }
+
         info!("Registered app IDs");
-        Ok(app_ids)
+        Ok(registered_app_ids)
     }
 
     pub async fn apply_special_app_behavior(
