@@ -311,3 +311,96 @@ Before modifying code again:
 6. run tests/CI, pin exact code SHA into iLoader, and physically retest.
 
 No new code patch has been made for this profile-platform finding yet.
+
+## Update - physical pairing succeeded; persistent CompanionProxy reuse isolated
+
+Date: **2026-09-09**
+
+### Exact builds physically tested
+
+isideload backend:
+
+`367d24c6443897d586493128bef0210203525157`
+
+iLoader pin/build:
+
+`ce868720316adf1b92b4fb1083db2f230f36f7ca`
+
+iLoader CI:
+
+- run `34403672997`;
+- completed SUCCESS;
+- Windows build and Windows EXE upload SUCCESS.
+
+Exact Windows setup SHA-256 physically used:
+
+`390667937EC44A9D820D217183F46F6F263003E8C574B981EFC6E16CB68E58F7`
+
+Same regression IPA:
+
+`WatchSensorLab-companion-unsigned-f539fe4105df.ipa`
+
+### Physical result - important progression
+
+The iPhone application installs successfully.
+
+The previous failure at the initial Watch lockdown forwarding step no longer occurs.
+
+On the first attempt, the real Apple Watch displayed a pairing/trust prompt. The user accidentally denied it. isideload then correctly failed with:
+
+`Failed to pair with the Apple Watch through companion proxy`
+`user denied pairing trust`
+
+After restarting the Watch, repeating the exact same installation and accepting the trust/pairing prompt, pairing proceeded successfully.
+
+The installation then advanced further and failed at:
+
+`Failed to forward Apple Watch installation proxy`
+
+at `watch_install.rs:193`, with:
+
+`device socket io failed`
+
+This is materially later than the previous failure. It proves:
+
+- initial `com.apple.mobile.lockdownd` forwarding succeeded;
+- the forwarded Watch lockdown connection succeeded;
+- Watch pairing/trust succeeded after user approval;
+- the Watch lockdown session progressed far enough to start `com.apple.mobile.installation_proxy`;
+- failure occurs when sending the NEXT `StartForwardingServicePort` command through CompanionProxy.
+
+### Current root-cause candidate
+
+At SHA `367d24c...`, one persistent `CompanionProxy` connection is reused across multiple forwarding operations.
+
+The working pymobiledevice3 implementation behaves differently: every `start_forwarding_service_port()` and `stop_forwarding_service_port()` call starts a fresh `com.apple.companion_proxy` lockdown service connection before sending its command.
+
+There is also historical libimobiledevice evidence that a CompanionProxy connection may successfully start one Watch forwarding operation and then fail on a subsequent operation with a mux/broken-pipe style error.
+
+Therefore the next patch changes isideload to use a fresh CompanionProxy service connection for EVERY Watch forwarding start/stop command:
+
+1. Watch lockdownd start forward;
+2. Watch installation_proxy start forward;
+3. installation_proxy stop forward;
+4. streaming_zip_conduit start forward;
+5. streaming_zip_conduit stop forward;
+6. Watch lockdownd stop forward.
+
+This is a root-cause-directed transport-lifetime correction, not another retry/timing patch.
+
+### Validation boundary
+
+The fresh-per-command CompanionProxy patch is NOT physically validated yet.
+
+Do not declare the one-click Watch path fixed until:
+
+1. isideload CI passes;
+2. exact new isideload SHA is pinned into iLoader;
+3. iLoader CI passes;
+4. exact Windows setup is installed;
+5. the SAME `f539fe...` regression IPA is used;
+6. iPhone installs;
+7. Watch install reaches streaming_zip_conduit and completes;
+8. Watch Sensor Lab launches physically on the Apple Watch.
+
+If the next test fails, the exact new `watch_install.rs` context/line must be recorded before changing anything else.

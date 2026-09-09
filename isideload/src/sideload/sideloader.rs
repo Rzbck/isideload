@@ -322,15 +322,9 @@ impl Sideloader {
         let watch_apps = signed_bundle.watch_apps().to_vec();
 
         if !watch_apps.is_empty() {
-            info!("Reconnecting to Apple Watch companion proxy after iPhone install...");
-            let mut install_companion_proxy = CompanionProxy::connect(device_provider)
-                .await
-                .context("Failed to reconnect to Apple Watch companion proxy after iPhone install")?;
-
-            info!("Installing Apple Watch companion app directly...");
+            info!("Installing Apple Watch companion app directly with fresh companion proxy connections...");
             crate::sideload::watch_install::install_watch_apps(
                 device_provider,
-                &mut install_companion_proxy,
                 &watch_apps,
                 &self.machine_name,
                 |progress| {
