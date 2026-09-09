@@ -9,14 +9,20 @@ use idevice::{
 };
 use plist::{Dictionary, Value};
 use rootcause::{option_ext::OptionExt, prelude::*};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tracing::{info, warn};
 
 use crate::{SideloadError as Error, sideload::bundle::Bundle};
 
 const WATCH_LOCKDOWN_PORT: u16 = 62078;
+const WATCH_LOCKDOWN_SERVICE: &str = "com.apple.mobile.lockdownd";
 const WATCH_INSTALL_PROXY_SERVICE: &str = "com.apple.mobile.installation_proxy";
 const WATCH_ZIP_SERVICE: &str = "com.apple.streaming_zip_conduit";
+const WATCH_FORWARD_CONNECT_ATTEMPTS: usize = 20;
+const WATCH_FORWARD_CONNECT_DELAY_MS: u64 = 50;
 const CENTRAL_DIRECTORY_HEADER: &[u8] = &[0x50, 0x4b, 0x01, 0x02];
 const ZIP_EXTRA: &[u8] = &[
     0x55, 0x54, 0x0d, 0x00, 0x07, 0xf3, 0xa2, 0xec, 0x60, 0xf6, 0xa2, 0xec, 0x60, 0xf3,
@@ -47,15 +53,17 @@ pub async fn install_watch_apps(
         .map_err(Error::IdeviceError)?;
 
     let forwarded_lockdown_port = companion_proxy
-        .start_forwarding_service_port(WATCH_LOCKDOWN_PORT, None, None)
+        .start_forwarding_service_port(WATCH_LOCKDOWN_PORT, Some(WATCH_LOCKDOWN_SERVICE), None)
         .await
         .map_err(Error::IdeviceError)?;
 
     let result = async {
-        let watch_connection = device_provider
-            .connect(forwarded_lockdown_port)
-            .await
-            .map_err(Error::IdeviceError)?;
+        let watch_connection = connect_forwarded_watch_port(
+            device_provider,
+            forwarded_lockdown_port,
+            "lockdown",
+        )
+        .await?;
         let mut watch_lockdown = LockdownClient::new(watch_connection);
 
         let watch_pairing = watch_lockdown
@@ -116,6 +124,50 @@ pub async fn install_watch_apps(
     result
 }
 
+async fn connect_forwarded_watch_port(
+    device_provider: &impl IdeviceProvider,
+    forwarded_port: u16,
+    service: &str,
+) -> Result<Idevice, Report> {
+    for attempt in 1..=WATCH_FORWARD_CONNECT_ATTEMPTS {
+        match device_provider.connect(forwarded_port).await {
+            Ok(connection) => {
+                if attempt > 1 {
+                    info!(
+                        "Connected to Apple Watch {} on forwarded port {} after {} attempts",
+                        service, forwarded_port, attempt
+                    );
+                }
+                return Ok(connection);
+            }
+            Err(error) if attempt < WATCH_FORWARD_CONNECT_ATTEMPTS => {
+                warn!(
+                    "Apple Watch {} forwarded port {} is not ready (attempt {}/{}): {}",
+                    service,
+                    forwarded_port,
+                    attempt,
+                    WATCH_FORWARD_CONNECT_ATTEMPTS,
+                    error
+                );
+                tokio::time::sleep(Duration::from_millis(
+                    WATCH_FORWARD_CONNECT_DELAY_MS,
+                ))
+                .await;
+            }
+            Err(error) => {
+                bail!(
+                    "Failed to connect to Apple Watch {} on forwarded iPhone port {} after {} attempts: {}",
+                    service,
+                    forwarded_port,
+                    WATCH_FORWARD_CONNECT_ATTEMPTS,
+                    error
+                );
+            }
+        }
+    }
+
+    unreachable!("bounded forwarded-port retry loop must return")
+}
 async fn remove_existing_watch_app(
     device_provider: &impl IdeviceProvider,
     companion_proxy: &mut CompanionProxy,
@@ -131,16 +183,22 @@ async fn remove_existing_watch_app(
         .context("Failed to start Apple Watch installation proxy")?;
 
     let forwarded_port = companion_proxy
-        .start_forwarding_service_port(remote_port, None, None)
+        .start_forwarding_service_port(
+            remote_port,
+            Some(WATCH_INSTALL_PROXY_SERVICE),
+            None,
+        )
         .await
         .map_err(Error::IdeviceError)
         .context("Failed to forward Apple Watch installation proxy")?;
 
     let result = async {
-        let mut connection = device_provider
-            .connect(forwarded_port)
-            .await
-            .map_err(Error::IdeviceError)?;
+        let mut connection = connect_forwarded_watch_port(
+            device_provider,
+            forwarded_port,
+            "installation proxy",
+        )
+        .await?;
 
         if ssl {
             connection
@@ -187,16 +245,22 @@ async fn install_watch_app_zip_conduit(
         .context("Failed to start Apple Watch streaming_zip_conduit")?;
 
     let forwarded_port = companion_proxy
-        .start_forwarding_service_port(remote_port, None, None)
+        .start_forwarding_service_port(
+            remote_port,
+            Some(WATCH_ZIP_SERVICE),
+            None,
+        )
         .await
         .map_err(Error::IdeviceError)
         .context("Failed to forward Apple Watch streaming_zip_conduit")?;
 
     let result = async {
-        let mut connection = device_provider
-            .connect(forwarded_port)
-            .await
-            .map_err(Error::IdeviceError)?;
+        let mut connection = connect_forwarded_watch_port(
+            device_provider,
+            forwarded_port,
+            "streaming_zip_conduit",
+        )
+        .await?;
 
         if ssl {
             connection
