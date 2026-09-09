@@ -253,7 +253,7 @@ impl Bundle {
     pub fn write_info(&self) -> Result<(), Report> {
         let info_plist_path = self.bundle_dir.join("Info.plist");
         let mut file = File::create(&info_plist_path).context(SideloadError::InvalidBundle(
-            "Failed to write Info.plist".to_string()),
+            "Failed to write Info.plist".to_string(),
         ))?;
         to_writer_binary(BufWriter::new(&mut file), &self.app_info).context(
             SideloadError::InvalidBundle("Failed to create Info.plist writer".to_string()),
