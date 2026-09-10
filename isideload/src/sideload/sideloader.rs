@@ -110,6 +110,20 @@ impl Sideloader {
         app.update_bundle_id(&main_bundle_id, &main_app_id_str)?;
         let watch_bundle_ids = app.watch_bundle_ids();
 
+        // Unsigned CI-built apps do not carry a signed entitlements blob. HealthKit's
+        // required Info.plist privacy keys do survive packaging, so use those keys to
+        // identify every app-ID-bearing bundle that needs the HealthKit App ID service.
+        let healthkit_bundle_ids = app
+            .bundle
+            .collect_app_id_bundles()
+            .into_iter()
+            .filter(|bundle| {
+                bundle.app_info.contains_key("NSHealthShareUsageDescription")
+                    || bundle.app_info.contains_key("NSHealthUpdateUsageDescription")
+            })
+            .filter_map(|bundle| bundle.bundle_identifier().map(str::to_string))
+            .collect::<std::collections::HashSet<_>>();
+
         let mut app_ids = app
             .register_app_ids(
                 /*&self.extensions_behavior, */ &mut self.dev_session,
@@ -145,6 +159,22 @@ impl Sideloader {
             .await?;
 
         for app_id in app_ids.iter_mut() {
+            if healthkit_bundle_ids.contains(&app_id.identifier) {
+                let device_type = if watch_bundle_ids.contains(&app_id.identifier) {
+                    Some(DeveloperDeviceType::Watchos)
+                } else {
+                    Some(DeveloperDeviceType::Ios)
+                };
+
+                app_id
+                    .ensure_healthkit_feature(&mut self.dev_session, &team, device_type)
+                    .await
+                    .context(format!(
+                        "Failed to configure HealthKit capability for {}",
+                        app_id.identifier
+                    ))?;
+            }
+
             // The synthetic sideloading app group is an iOS-side concern.
             // Do not configure a watchOS App ID through the default iOS endpoint.
             if watch_bundle_ids.contains(&app_id.identifier) {
