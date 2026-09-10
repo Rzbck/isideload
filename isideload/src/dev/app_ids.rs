@@ -255,4 +255,33 @@ impl AppId {
 
         Ok(())
     }
+
+    pub async fn ensure_healthkit_feature(
+        &mut self,
+        dev_session: &mut DeveloperSession,
+        team: &DeveloperTeam,
+        device_type: impl Into<Option<DeveloperDeviceType>> + Send,
+    ) -> Result<(), Report> {
+        const HEALTHKIT_SERVICE_ID: &str = "HK421J6T7P";
+
+        let healthkit_enabled = self
+            .features
+            .get(HEALTHKIT_SERVICE_ID)
+            .and_then(|value| value.as_boolean())
+            .unwrap_or(false);
+
+        if !healthkit_enabled {
+            let body = plist!(dict {
+                HEALTHKIT_SERVICE_ID: true,
+            });
+            let new_features = dev_session
+                .update_app_id(team, self, body, device_type)
+                .await
+                .context("Failed to enable HealthKit for developer app ID")?
+                .features;
+            self.features = new_features;
+        }
+
+        Ok(())
+    }
 }
