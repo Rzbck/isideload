@@ -191,7 +191,7 @@ impl GrandSlam {
         );
         headers.insert(
             "X-Xcode-Version",
-            HeaderValue::from_static("27.0 (27A5218g)"),
+            HeaderValue::from_static("27.0 (27A266a)"),
         );
         headers.insert(
             "X-Apple-App-Info",
