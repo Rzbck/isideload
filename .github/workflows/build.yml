@@ -9,6 +9,10 @@ on:
       - "**"
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     strategy:
@@ -29,16 +33,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Cache Rust dependencies
+      - name: Cache Cargo dependencies
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: ${{ matrix.platform }}-isideload-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-
+            ${{ matrix.platform }}-isideload-cargo-
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -55,8 +58,10 @@ jobs:
       - name: Build
         run: cargo build -p minimal
 
-      - name: Upload binary
+      - name: Upload manual candidate binary
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
           path: target/debug/${{ matrix.artifact_name }}
+          retention-days: 2
