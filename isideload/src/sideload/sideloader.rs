@@ -28,7 +28,7 @@ use idevice::{
 };
 use plist::Dictionary;
 use rootcause::{option_ext::OptionExt, prelude::*};
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct Sideloader {
     team_selection: TeamSelection,
@@ -292,40 +292,47 @@ impl Sideloader {
             .ensure_device_registered(&team, &device_info.name, &device_info.udid, None)
             .await?;
 
-        // Apple Watch companions are exposed by the iPhone's companion_proxy.
-        // Register each paired Watch through Apple's watchOS developer endpoint
-        // before requesting watchOS provisioning profiles.
-        let mut provisioning_companion_proxy = CompanionProxy::connect(device_provider)
-            .await
-            .context("Failed to connect to Apple Watch companion proxy")?;
+        // Apple Watch companions are exposed by the iPhone's companion_proxy. Some network
+        // lockdown transports accept the service connection but reset the socket when the
+        // registry is queried. Do not block an otherwise-valid iPhone/iPad sideload on this
+        // optional preflight; already-registered Watches can still use their existing portal
+        // registration, while USB keeps the fully validated registration path below.
+        match CompanionProxy::connect(device_provider).await {
+            Ok(mut provisioning_companion_proxy) => {
+                match provisioning_companion_proxy.get_device_registry().await {
+                    Ok(paired_watches) => {
+                        for watch_udid in paired_watches {
+                            let watch_name = provisioning_companion_proxy
+                                .get_value(&watch_udid, "DeviceName")
+                                .await
+                                .ok()
+                                .and_then(|value| value.as_string().map(str::to_string))
+                                .unwrap_or_else(|| "Apple Watch".to_string());
 
-        let paired_watches = provisioning_companion_proxy
-            .get_device_registry()
-            .await
-            .context("Failed to list paired Apple Watch devices")?;
-
-        for watch_udid in paired_watches {
-            let watch_name = provisioning_companion_proxy
-                .get_value(&watch_udid, "DeviceName")
-                .await
-                .ok()
-                .and_then(|value| value.as_string().map(str::to_string))
-                .unwrap_or_else(|| "Apple Watch".to_string());
-
-            self.dev_session
-                .ensure_device_registered(
-                    &team,
-                    &watch_name,
-                    &watch_udid,
-                    Some(DeveloperDeviceType::Watchos),
-                )
-                .await
-                .context("Failed to register paired Apple Watch as a development device")?;
+                            self.dev_session
+                                .ensure_device_registered(
+                                    &team,
+                                    &watch_name,
+                                    &watch_udid,
+                                    Some(DeveloperDeviceType::Watchos),
+                                )
+                                .await
+                                .context("Failed to register paired Apple Watch as a development device")?;
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Unable to list paired Apple Watch devices over current transport; continuing without Watch pre-registration: {e}"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    "Unable to connect to Apple Watch companion proxy over current transport; continuing without Watch pre-registration: {e}"
+                );
+            }
         }
-
-        // companion_proxy can be invalidated while the iPhone app is installed.
-        // Do not reuse this provisioning connection for the post-install Watch transfer.
-        drop(provisioning_companion_proxy);
 
         let (signed_app_path, special_app) = self
             .sign_app(
