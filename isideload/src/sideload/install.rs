@@ -2,6 +2,7 @@ use idevice::{
     IdeviceService, RsdService,
     afc::AfcClient,
     installation_proxy::InstallationProxyClient,
+    lockdown::LockdownClient,
     provider::{IdeviceProvider, RsdProvider},
     rsd::RsdHandshake,
 };
@@ -20,7 +21,42 @@ pub async fn install_app(
     app_path: &Path,
     progress_callback: impl Fn(u64) + Send + Sync,
 ) -> Result<(), Report> {
-    let mut afc_client = AfcClient::connect(provider)
+    // Keep one authenticated Lockdown session alive for the full AFC upload and
+    // installation_proxy transaction. Direct Wi-Fi service sockets can be torn down
+    // when the Lockdown session that started them is dropped, even though the same
+    // pattern is tolerated over usbmux/USB.
+    let pairing_file = provider
+        .get_pairing_file()
+        .await
+        .map_err(Error::IdeviceError)?;
+    let mut lockdown = LockdownClient::connect(provider)
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to connect to lockdown for app installation")?;
+    let legacy = lockdown
+        .start_session(&pairing_file)
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to start lockdown session for app installation")?;
+
+    let (afc_port, afc_ssl) = lockdown
+        .start_service(AfcClient::service_name())
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to start AFC service")?;
+    let mut afc_idevice = provider
+        .connect(afc_port)
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to connect to AFC service")?;
+    if afc_ssl {
+        afc_idevice
+            .start_session(&pairing_file, legacy)
+            .await
+            .map_err(Error::IdeviceError)
+            .context("Failed to secure AFC service connection")?;
+    }
+    let mut afc_client = AfcClient::from_stream(afc_idevice)
         .await
         .map_err(Error::IdeviceError)?;
 
@@ -43,7 +79,24 @@ pub async fn install_app(
     )
     .await?;
 
-    let mut instproxy_client = InstallationProxyClient::connect(provider)
+    let (instproxy_port, instproxy_ssl) = lockdown
+        .start_service(InstallationProxyClient::service_name())
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to start installation proxy service")?;
+    let mut instproxy_idevice = provider
+        .connect(instproxy_port)
+        .await
+        .map_err(Error::IdeviceError)
+        .context("Failed to connect to installation proxy service")?;
+    if instproxy_ssl {
+        instproxy_idevice
+            .start_session(&pairing_file, legacy)
+            .await
+            .map_err(Error::IdeviceError)
+            .context("Failed to secure installation proxy connection")?;
+    }
+    let mut instproxy_client = InstallationProxyClient::from_stream(instproxy_idevice)
         .await
         .map_err(Error::IdeviceError)?;
 
