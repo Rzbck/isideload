@@ -56,7 +56,7 @@ pub async fn install_app(
             .map_err(Error::IdeviceError)
             .context("Failed to secure AFC service connection")?;
     }
-    let mut afc_client = AfcClient::from_stream(afc_idevice)
+    let mut afc_client = <AfcClient as IdeviceService>::from_stream(afc_idevice)
         .await
         .map_err(Error::IdeviceError)?;
 
@@ -96,7 +96,7 @@ pub async fn install_app(
             .map_err(Error::IdeviceError)
             .context("Failed to secure installation proxy connection")?;
     }
-    let mut instproxy_client = InstallationProxyClient::from_stream(instproxy_idevice)
+    let mut instproxy_client = <InstallationProxyClient as IdeviceService>::from_stream(instproxy_idevice)
         .await
         .map_err(Error::IdeviceError)?;
 
