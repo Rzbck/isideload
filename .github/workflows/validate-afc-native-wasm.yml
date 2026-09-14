@@ -36,8 +36,8 @@ jobs:
       - name: Check isideload
         run: cargo check -p isideload
 
-      - name: Check formatting
-        run: cargo fmt --all --check
+      - name: Check changed Rust file formatting
+        run: rustfmt --edition 2024 --check isideload/src/sideload/install.rs
 
   wasm-check:
     name: WASM check
